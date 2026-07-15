@@ -151,7 +151,7 @@
     <p>Steel framing · Padrón 1371 · Smart Building Uruguay</p>
   </header>
 
-  <div id="hint">Click en un panel para ver su ficha con medidas. Usá las flechas ← → (o los botones) para recorrer panel por panel.</div>
+  <div id="hint">Click en un panel para ver su ficha con medidas. Las flechas ← → van sumando/quitando paneles para armar el modelo paso a paso. Usá 🎯 para centrar la cámara y el control 🌓 para ajustar el fondo.</div>
 
   <button id="sidebarToggle">☰</button>
   <div id="sidebar">
@@ -164,15 +164,20 @@
 
   <div id="bottombar">
     <div class="pill">
-      <button id="prevBtn" title="Panel anterior">◀</button>
+      <button id="prevBtn" title="Quitar último panel">◀</button>
       <div>
-        <div id="panelLabel">Vista completa</div>
+        <div id="panelLabel">Modelo completo</div>
         <span id="panelSub"></span>
       </div>
-      <button id="nextBtn" title="Panel siguiente">▶</button>
+      <button id="nextBtn" title="Agregar siguiente panel">▶</button>
     </div>
     <button id="measureBtn">📏 Medir</button>
     <button id="clearMeasureBtn">Borrar medidas</button>
+    <button id="centerBtn" class="pill" style="cursor:pointer;">🎯 Centrar</button>
+    <div class="pill" style="gap:8px;">
+      <span style="font-size:14px;">🌓</span>
+      <input type="range" id="bgSlider" min="15" max="95" value="88" style="width:90px;accent-color:var(--accent);">
+    </div>
   </div>
 
   <div id="jpgModal">
@@ -255,8 +260,11 @@ loader.load(
   (gltf) => {
     modelRoot = gltf.scene;
     scene.add(modelRoot);
+    applyBlueprintStyle(modelRoot);
     buildGroups(modelRoot);
     fitCameraToModel();
+    currentIndex = PANEL_ORDER.length - 1; // arranca con el modelo completo armado
+    updateNavUI();
     renderLayerUI();
     document.getElementById("loading").style.display = "none";
   },
@@ -272,6 +280,22 @@ loader.load(
     console.error(err);
   }
 );
+
+const FACE_MATERIAL = new THREE.MeshStandardMaterial({
+  color: 0xf5f5f2, roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
+});
+const EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x1a1a1a });
+
+function applyBlueprintStyle(root) {
+  root.traverse((obj) => {
+    if (obj.isMesh) {
+      obj.material = FACE_MATERIAL;
+      const edgeGeo = new THREE.EdgesGeometry(obj.geometry, 20);
+      const edges = new THREE.LineSegments(edgeGeo, EDGE_MATERIAL);
+      obj.add(edges);
+    }
+  });
+}
 
 function buildGroups(root) {
   const assembly = root.getObjectByName("Assembly-505") || root;
@@ -303,6 +327,35 @@ function fitCameraToModel() {
   camera.far = maxDim * 20;
   camera.updateProjectionMatrix();
 }
+
+function fitCameraToVisible() {
+  const box = new THREE.Box3();
+  let any = false;
+  Object.values(groups).forEach((g) => {
+    if (g.visible) {
+      const b = new THREE.Box3().setFromObject(g);
+      if (!b.isEmpty()) { box.union(b); any = true; }
+    }
+  });
+  if (!any) { fitCameraToModel(); return; }
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z, 0.5);
+  const dist = maxDim * 1.6;
+  camera.position.set(center.x + dist * 0.6, center.y + dist * 0.5, center.z + dist * 0.6);
+  controls.target.copy(center);
+  controls.update();
+}
+
+document.getElementById("centerBtn").onclick = fitCameraToVisible;
+
+const bgSlider = document.getElementById("bgSlider");
+function updateBackground() {
+  const v = bgSlider.value / 100;
+  scene.background = new THREE.Color(v, v, v);
+}
+bgSlider.addEventListener("input", updateBackground);
+updateBackground();
 
 // ============== UI DE CAPAS ==============
 function renderLayerUI() {
@@ -356,7 +409,7 @@ function makeLayerRow(code) {
   row.appendChild(dot);
   row.addEventListener("click", (e) => {
     if (e.target === cb) return;
-    focusPanel(code);
+    fitCameraToObject(groups[code]);
   });
   return row;
 }
@@ -367,27 +420,40 @@ function setVisible(code, visible) {
   if (row) row.checked = visible;
 }
 
-document.getElementById("showAllBtn").onclick = () => Object.keys(groups).forEach((c) => setVisible(c, true));
-document.getElementById("hideAllBtn").onclick = () => Object.keys(groups).forEach((c) => setVisible(c, false));
+document.getElementById("showAllBtn").onclick = () => {
+  Object.keys(groups).forEach((c) => setVisible(c, true));
+  currentIndex = PANEL_ORDER.length - 1;
+  updateNavUI();
+  fitCameraToVisible();
+};
+document.getElementById("hideAllBtn").onclick = () => {
+  Object.keys(groups).forEach((c) => setVisible(c, false));
+  currentIndex = -1;
+  updateNavUI();
+  fitCameraToVisible();
+};
 
 document.getElementById("sidebarToggle").onclick = () => {
   document.getElementById("sidebar").classList.toggle("collapsed");
   document.getElementById("bottombar").classList.toggle("sidebar-collapsed");
 };
 
-// ============== NAVEGACION POR FLECHAS ==============
-let currentIndex = -1; // -1 = vista completa
+// ============== NAVEGACION POR FLECHAS (acumulativa: va sumando paneles) ==============
+let currentIndex = -1; // se fija en PANEL_ORDER.length-1 tras cargar (modelo completo armado)
 
 function updateNavUI() {
   const label = document.getElementById("panelLabel");
   const sub = document.getElementById("panelSub");
   if (currentIndex === -1) {
-    label.textContent = "Vista completa";
-    sub.textContent = "";
+    label.textContent = "Sin paneles";
+    sub.textContent = `0 / ${PANEL_ORDER.length} agregados`;
+  } else if (currentIndex === PANEL_ORDER.length - 1) {
+    label.textContent = "Modelo completo";
+    sub.textContent = `${PANEL_ORDER.length} / ${PANEL_ORDER.length} agregados`;
   } else {
     const code = PANEL_ORDER[currentIndex];
-    label.textContent = PANEL_LABELS[code] || code;
-    sub.textContent = `Panel ${currentIndex + 1} / ${PANEL_ORDER.length} — ${code}`;
+    label.textContent = "+ " + (PANEL_LABELS[code] || code);
+    sub.textContent = `${currentIndex + 1} / ${PANEL_ORDER.length} agregados — último: ${code}`;
   }
   document.getElementById("prevBtn").disabled = currentIndex <= -1;
   document.getElementById("nextBtn").disabled = currentIndex >= PANEL_ORDER.length - 1;
@@ -395,24 +461,11 @@ function updateNavUI() {
   document.querySelectorAll(".layer-row").forEach((r) => r.classList.remove("current-panel"));
   if (currentIndex >= 0) {
     const row = document.querySelector(`.layer-row[data-code="${PANEL_ORDER[currentIndex]}"]`);
-    if (row) row.scrollIntoView({ block: "nearest" });
-    if (row) row.classList.add("current-panel");
+    if (row) { row.scrollIntoView({ block: "nearest" }); row.classList.add("current-panel"); }
   }
 }
 
-function focusPanel(code) {
-  const idx = PANEL_ORDER.indexOf(code);
-  if (idx === -1) return;
-  currentIndex = idx;
-  isolatePanel(code);
-  updateNavUI();
-}
-
-function isolatePanel(code) {
-  Object.keys(groups).forEach((k) => setVisible(k, false));
-  setVisible(code, true);
-  // encuadrar camara sobre el panel
-  const obj = groups[code];
+function fitCameraToObject(obj) {
   if (!obj) return;
   const box = new THREE.Box3().setFromObject(obj);
   if (box.isEmpty()) return;
@@ -425,25 +478,19 @@ function isolatePanel(code) {
   controls.update();
 }
 
-function showFullView() {
-  Object.keys(groups).forEach((k) => setVisible(k, true));
-  currentIndex = -1;
-  fitCameraToModel();
-  updateNavUI();
-}
-
 document.getElementById("prevBtn").onclick = () => {
-  if (currentIndex === -1) return;
-  if (currentIndex === 0) { showFullView(); return; }
+  if (currentIndex <= -1) return;
+  setVisible(PANEL_ORDER[currentIndex], false);
   currentIndex--;
-  isolatePanel(PANEL_ORDER[currentIndex]);
   updateNavUI();
+  fitCameraToVisible();
 };
 document.getElementById("nextBtn").onclick = () => {
   if (currentIndex >= PANEL_ORDER.length - 1) return;
   currentIndex++;
-  isolatePanel(PANEL_ORDER[currentIndex]);
+  setVisible(PANEL_ORDER[currentIndex], true);
   updateNavUI();
+  fitCameraToVisible();
 };
 window.addEventListener("keydown", (e) => {
   if (e.key === "ArrowRight") document.getElementById("nextBtn").click();
@@ -491,7 +538,7 @@ renderer.domElement.addEventListener("click", (e) => {
   if (code && PANEL_IMAGES[code]) {
     openJpgModal(code);
   } else if (code) {
-    focusPanel(code);
+    fitCameraToObject(groups[code]);
   }
 });
 
@@ -518,7 +565,7 @@ function toggleMeasureMode() {
   measureBtn.classList.toggle("active", measureMode);
   document.getElementById("hint").textContent = measureMode
     ? "Modo medición: hacé click en dos puntos del modelo para medir la distancia entre ellos."
-    : "Click en un panel para ver su ficha con medidas. Usá las flechas ← → (o los botones) para recorrer panel por panel.";
+    : "Click en un panel para ver su ficha con medidas. Las flechas ← → van sumando/quitando paneles. Usá 🎯 para centrar y 🌓 para ajustar el fondo.";
   if (!measureMode) measurePoints = [];
 }
 measureBtn.onclick = toggleMeasureMode;
