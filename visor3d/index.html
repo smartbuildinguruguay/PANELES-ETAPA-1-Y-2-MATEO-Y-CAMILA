@@ -699,6 +699,46 @@ renderer.domElement.addEventListener("mouseleave", () => {
   lastHoverSnap = null;
 });
 
+// ---- Resaltado de grupo/panel al pasar el cursor (fuera del modo medicion) ----
+const HOVER_FACE_MATERIAL = new THREE.MeshStandardMaterial({
+  color: 0xf2b84b, roughness: 0.9, metalness: 0, side: THREE.DoubleSide,
+});
+let hoveredGroupKey = null;
+let hoverHighlightPending = false;
+
+function setGroupHighlight(key, on) {
+  const targets = [];
+  if (groups[key]) targets.push(groups[key]);
+  if (LINKED_EXTRAS[key]) targets.push(...LINKED_EXTRAS[key]);
+  targets.forEach((root) => {
+    root.traverse((o) => {
+      if (o.isMesh) o.material = on ? HOVER_FACE_MATERIAL : FACE_MATERIAL;
+    });
+  });
+}
+
+renderer.domElement.addEventListener("mousemove", (e) => {
+  if (measureMode || !modelRoot) return;
+  getPointer(e);
+  if (hoverHighlightPending) return;
+  hoverHighlightPending = true;
+  requestAnimationFrame(() => {
+    hoverHighlightPending = false;
+    raycaster.setFromCamera(pointer, camera);
+    const intersects = raycaster.intersectObject(modelRoot, true);
+    const code = intersects.length ? findPanelCodeForObject(intersects[0].object) : null;
+    if (code === hoveredGroupKey) return;
+    if (hoveredGroupKey) setGroupHighlight(hoveredGroupKey, false);
+    if (code) setGroupHighlight(code, true);
+    hoveredGroupKey = code;
+    renderer.domElement.style.cursor = code ? "pointer" : "grab";
+  });
+});
+
+renderer.domElement.addEventListener("mouseleave", () => {
+  if (hoveredGroupKey) { setGroupHighlight(hoveredGroupKey, false); hoveredGroupKey = null; }
+});
+
 // ============== MODAL JPG ==============
 function openJpgModal(code) {
   document.getElementById("jpgModalTitle").textContent = (PANEL_LABELS[code] || code) + "  ·  " + code;
@@ -724,6 +764,10 @@ function toggleMeasureMode() {
   document.getElementById("hint").textContent = measureMode
     ? "Modo medición: el círculo amarillo muestra el vértice más cercano — click para tomarlo como punto de medida (2 puntos = distancia)."
     : "Click en un panel para ver su ficha con medidas. Las flechas ← → van sumando/quitando paneles. Usá 🎯 para centrar y 🌓 para ajustar el fondo.";
+  if (measureMode && hoveredGroupKey) {
+    setGroupHighlight(hoveredGroupKey, false);
+    hoveredGroupKey = null;
+  }
   if (!measureMode) {
     measurePoints = [];
     hoverMarker.visible = false;
