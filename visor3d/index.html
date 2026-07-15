@@ -174,6 +174,11 @@
     <button id="measureBtn">📏 Medir</button>
     <button id="clearMeasureBtn">Borrar medidas</button>
     <button id="centerBtn" class="pill" style="cursor:pointer;">🎯 Centrar</button>
+    <div class="pill" style="gap:6px;">
+      <span style="font-size:12px;">🔍−</span>
+      <input type="range" id="zoomSlider" min="0" max="6" step="1" value="3" style="width:110px;accent-color:var(--accent);">
+      <span style="font-size:12px;">🔍+</span>
+    </div>
     <div class="pill" style="gap:8px;">
       <span style="font-size:14px;">🌓</span>
       <input type="range" id="bgSlider" min="15" max="95" value="88" style="width:90px;accent-color:var(--accent);">
@@ -362,6 +367,23 @@ function fitCameraToVisible() {
 }
 
 document.getElementById("centerBtn").onclick = fitCameraToVisible;
+
+const zoomSlider = document.getElementById("zoomSlider");
+function applyZoomLevel() {
+  if (!modelBox) return;
+  const size = modelBox.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const minD = maxDim * 0.08;
+  const maxD = maxDim * 3.2;
+  const t = zoomSlider.value / 6; // 0..1 en 7 pasos
+  const dist = minD * Math.pow(maxD / minD, 1 - t); // slider a la derecha = mas cerca
+  const dir = new THREE.Vector3().subVectors(camera.position, controls.target);
+  if (dir.lengthSq() < 1e-6) dir.set(0.6, 0.5, 0.6);
+  dir.normalize().multiplyScalar(dist);
+  camera.position.copy(controls.target).add(dir);
+  controls.update();
+}
+zoomSlider.addEventListener("input", applyZoomLevel);
 
 const bgSlider = document.getElementById("bgSlider");
 function updateBackground() {
