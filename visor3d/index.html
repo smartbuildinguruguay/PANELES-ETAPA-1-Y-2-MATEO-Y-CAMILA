@@ -623,7 +623,8 @@ renderer.domElement.addEventListener("click", (e) => {
   const hit = intersects[0];
 
   if (measureMode) {
-    addMeasurePoint(hit.point);
+    const snapped = lastHoverSnap || hit.point;
+    addMeasurePoint(snapped);
     return;
   }
 
@@ -633,6 +634,63 @@ renderer.domElement.addEventListener("click", (e) => {
   } else if (code) {
     fitCameraToObject(groups[code]);
   }
+});
+
+// ---- Snapping al vertice mas cercano + marcador de preview (hover) ----
+const _vTmp = new THREE.Vector3();
+function findNearestVertex(mesh, worldPoint) {
+  const geo = mesh.geometry;
+  const posAttr = geo && geo.attributes && geo.attributes.position;
+  if (!posAttr) return worldPoint.clone();
+  const localPoint = mesh.worldToLocal(worldPoint.clone());
+  let minDist = Infinity, nearestIdx = -1;
+  for (let i = 0; i < posAttr.count; i++) {
+    _vTmp.fromBufferAttribute(posAttr, i);
+    const d = _vTmp.distanceToSquared(localPoint);
+    if (d < minDist) { minDist = d; nearestIdx = i; }
+  }
+  if (nearestIdx === -1) return worldPoint.clone();
+  _vTmp.fromBufferAttribute(posAttr, nearestIdx);
+  return mesh.localToWorld(_vTmp.clone());
+}
+
+const hoverMarker = new THREE.Mesh(
+  new THREE.RingGeometry(0.028, 0.045, 28),
+  new THREE.MeshBasicMaterial({ color: 0xffcc33, side: THREE.DoubleSide, depthTest: false, transparent: true, opacity: 0.95 })
+);
+hoverMarker.renderOrder = 999;
+hoverMarker.visible = false;
+scene.add(hoverMarker);
+
+let lastHoverSnap = null;
+let hoverPending = false;
+
+renderer.domElement.addEventListener("mousemove", (e) => {
+  if (!measureMode || !modelRoot) return;
+  getPointer(e);
+  if (hoverPending) return;
+  hoverPending = true;
+  requestAnimationFrame(() => {
+    hoverPending = false;
+    raycaster.setFromCamera(pointer, camera);
+    const intersects = raycaster.intersectObject(modelRoot, true);
+    if (!intersects.length) {
+      hoverMarker.visible = false;
+      lastHoverSnap = null;
+      return;
+    }
+    const hit = intersects[0];
+    const snapped = findNearestVertex(hit.object, hit.point);
+    lastHoverSnap = snapped;
+    hoverMarker.position.copy(snapped);
+    hoverMarker.quaternion.copy(camera.quaternion);
+    hoverMarker.visible = true;
+  });
+});
+
+renderer.domElement.addEventListener("mouseleave", () => {
+  hoverMarker.visible = false;
+  lastHoverSnap = null;
 });
 
 // ============== MODAL JPG ==============
@@ -656,10 +714,15 @@ const clearMeasureBtn = document.getElementById("clearMeasureBtn");
 function toggleMeasureMode() {
   measureMode = !measureMode;
   measureBtn.classList.toggle("active", measureMode);
+  renderer.domElement.style.cursor = measureMode ? "crosshair" : "grab";
   document.getElementById("hint").textContent = measureMode
-    ? "Modo medición: hacé click en dos puntos del modelo para medir la distancia entre ellos."
+    ? "Modo medición: el círculo amarillo muestra el vértice más cercano — click para tomarlo como punto de medida (2 puntos = distancia)."
     : "Click en un panel para ver su ficha con medidas. Las flechas ← → van sumando/quitando paneles. Usá 🎯 para centrar y 🌓 para ajustar el fondo.";
-  if (!measureMode) measurePoints = [];
+  if (!measureMode) {
+    measurePoints = [];
+    hoverMarker.visible = false;
+    lastHoverSnap = null;
+  }
 }
 measureBtn.onclick = toggleMeasureMode;
 
@@ -731,6 +794,7 @@ function animate() {
   requestAnimationFrame(animate);
   controls.update();
   updateMeasureLabels();
+  if (hoverMarker.visible) hoverMarker.quaternion.copy(camera.quaternion);
   renderer.render(scene, camera);
 }
 animate();
