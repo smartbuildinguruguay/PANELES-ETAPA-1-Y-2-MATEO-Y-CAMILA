@@ -268,6 +268,7 @@ window.addEventListener("resize", () => {
 
 // ============== CARGA DEL MODELO ==============
 const groups = {};        // codigo/etiqueta -> THREE.Object3D
+const LINKED_EXTRAS = {}; // codigo de panel real -> [Object3D] que deben seguir su visibilidad
 const originalMaterials = new Map(); // mesh -> material original (para resaltados)
 let modelRoot = null;
 let modelBox = null;
@@ -327,12 +328,19 @@ function buildGroups(root) {
       groups[child.name] = child;
       return;
     }
-    // Clasificar por nombre: lo que dice "Cubierta" es techo, el resto son restos/Etapa 2
     if (child.name && /cubierta/i.test(child.name)) {
       techoExtras.push(child);
-    } else {
-      etapa2Extras.push(child);
+      return;
     }
+    // Piezas sueltas "Plate_Top" que en realidad son parte de FNP2/FNP3 (confirmado visualmente),
+    // no de Etapa 2 — se enganchan para que sigan siempre la visibilidad de su panel real.
+    if (child.name && child.name.startsWith("Plate_Top")) {
+      const targetPanel = child.name.includes("#2") ? "FNP3" : "FNP2";
+      if (!LINKED_EXTRAS[targetPanel]) LINKED_EXTRAS[targetPanel] = [];
+      LINKED_EXTRAS[targetPanel].push(child);
+      return;
+    }
+    etapa2Extras.push(child);
   });
 
   FULL_SEQUENCE = [...PANEL_ORDER_BASE];
@@ -483,6 +491,7 @@ function makeLayerRow(code) {
 
 function setVisible(code, visible) {
   if (groups[code]) groups[code].visible = visible;
+  if (LINKED_EXTRAS[code]) LINKED_EXTRAS[code].forEach((obj) => { obj.visible = visible; });
   const row = document.querySelector(`.layer-row[data-code="${code}"] input`);
   if (row) row.checked = visible;
 }
@@ -607,6 +616,9 @@ function findPanelCodeForObject(obj) {
   while (cur) {
     for (const key in groups) {
       if (groups[key] === cur) return key;
+    }
+    for (const key in LINKED_EXTRAS) {
+      if (LINKED_EXTRAS[key].includes(cur)) return key;
     }
     if (cur.name && cur.name.startsWith("Assembly")) return null;
     cur = cur.parent;
