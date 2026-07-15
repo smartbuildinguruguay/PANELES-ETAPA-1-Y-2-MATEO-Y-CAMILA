@@ -28,9 +28,10 @@
   #sidebar{
     position:absolute;top:0;right:0;bottom:0;z-index:30;width:300px;max-width:86vw;
     background:rgba(15,22,38,0.94);backdrop-filter:blur(6px);
-    color:#fff;overflow-y:auto;padding:70px 16px 16px;
+    color:#fff;
     transform:translateX(0);transition:transform .25s ease;
     border-left:1px solid rgba(255,255,255,0.08);
+    display:flex;flex-direction:column;
   }
   #sidebar.collapsed{transform:translateX(100%);}
   #sidebarToggle{
@@ -38,6 +39,8 @@
     background:var(--navy-light);color:#fff;border:none;border-radius:8px;
     width:36px;height:36px;font-size:16px;cursor:pointer;
   }
+  #sidebarHandle{display:none;} /* solo se usa en mobile (bottom sheet) */
+  #sidebarBody{flex:1;min-height:0;overflow-y:auto;padding:70px 16px 16px;}
   .layer-group{margin-bottom:14px;}
   .layer-group-title{
     font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#9fb0cc;
@@ -53,6 +56,7 @@
   }
   .layer-row:hover{background:rgba(255,255,255,0.06);}
   .layer-row.current-panel{background:rgba(217,119,87,0.25);}
+  .layer-row.picked{background:rgba(242,184,75,0.22);outline:1px solid rgba(242,184,75,0.5);}
   .layer-row input{accent-color:var(--accent);width:15px;height:15px;cursor:pointer;}
   .layer-row .lname{flex:1;}
   .layer-row .jpgdot{width:6px;height:6px;border-radius:50%;background:var(--accent);opacity:0;}
@@ -136,9 +140,30 @@
   }
 
   @media (max-width: 720px){
-    #sidebar{width:260px;}
-    #bottombar{right:16px;bottom:80px;}
-    #sidebar:not(.collapsed) ~ #bottombar{right:16px;}
+    #sidebar{
+      top:auto;left:0;right:0;bottom:0;width:100%;max-width:100%;
+      height:56vh;max-height:56vh;
+      border-left:none;border-top:1px solid rgba(255,255,255,0.08);
+      border-radius:16px 16px 0 0;
+      transform:translateY(0);
+      transition:transform .28s ease;
+      box-shadow:0 -6px 24px rgba(0,0,0,0.35);
+    }
+    /* colapsado: solo la manija queda visible, apenas asomada del borde inferior */
+    #sidebar.collapsed{transform:translateY(calc(100% - 46px));}
+    #sidebarToggle{display:none;} /* en mobile se abre/cierra desde la manija */
+    #sidebarHandle{
+      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;
+      height:46px;flex-shrink:0;cursor:pointer;touch-action:none;
+      background:rgba(15,22,38,0.98);border-radius:16px 16px 0 0;
+      color:#fff;font-size:11.5px;font-weight:700;letter-spacing:.03em;
+    }
+    #sidebarHandle .grip{width:36px;height:4px;border-radius:3px;background:rgba(255,255,255,0.35);}
+    #sidebarBody{padding:12px 16px 16px;}
+    #bottombar{left:16px;right:16px;bottom:16px;transition:opacity .2s ease;}
+    /* mientras el panel esta abierto, no estorbar con la barra inferior */
+    #sidebar:not(.collapsed) ~ #bottombar{opacity:0;pointer-events:none;}
+    #hint{max-width:calc(100vw - 32px);}
   }
 </style>
 </head>
@@ -156,11 +181,17 @@
 
   <button id="sidebarToggle">☰</button>
   <div id="sidebar">
-    <div id="globalBtns">
-      <button id="showAllBtn">Mostrar todo</button>
-      <button id="hideAllBtn">Ocultar todo</button>
+    <div id="sidebarHandle">
+      <div class="grip"></div>
+      <span>Capas / Paneles</span>
     </div>
-    <div id="layersContainer"></div>
+    <div id="sidebarBody">
+      <div id="globalBtns">
+        <button id="showAllBtn">Mostrar todo</button>
+        <button id="hideAllBtn">Ocultar todo</button>
+      </div>
+      <div id="layersContainer"></div>
+    </div>
   </div>
 
   <div id="bottombar">
@@ -252,14 +283,16 @@ controls.enableZoom = false; // zoom propio mas abajo, control total del comport
 controls.panSpeed = 0.9;
 controls.rotateSpeed = 0.75;
 controls.mouseButtons = {
-  LEFT: THREE.MOUSE.PAN,
+  LEFT: THREE.MOUSE.ROTATE,
   MIDDLE: THREE.MOUSE.DOLLY,
-  RIGHT: THREE.MOUSE.ROTATE,
+  RIGHT: THREE.MOUSE.PAN,
 };
 controls.touches = {
   ONE: THREE.TOUCH.ROTATE,
   TWO: THREE.TOUCH.DOLLY_PAN,
 };
+// El pan con click derecho no debe abrir el menu contextual del navegador
+renderer.domElement.addEventListener("contextmenu", (e) => e.preventDefault());
 
 window.addEventListener("resize", () => {
   camera.aspect = wrap.clientWidth / wrap.clientHeight;
@@ -506,7 +539,8 @@ function makeLayerRow(code) {
   row.appendChild(dot);
   row.addEventListener("click", (e) => {
     if (e.target === cb) return;
-    fitCameraToObject(groups[code]);
+    selectPanel(selectedGroupKey === code ? null : code);
+    if (PANEL_IMAGES[code]) openJpgModal(code);
   });
   return row;
 }
@@ -531,10 +565,64 @@ document.getElementById("hideAllBtn").onclick = () => {
   updateNavUI();
 };
 
-document.getElementById("sidebarToggle").onclick = () => {
-  document.getElementById("sidebar").classList.toggle("collapsed");
-  document.getElementById("bottombar").classList.toggle("sidebar-collapsed");
-};
+const sidebarEl = document.getElementById("sidebar");
+const bottombarEl = document.getElementById("bottombar");
+
+function toggleSidebar() {
+  sidebarEl.classList.toggle("collapsed");
+  bottombarEl.classList.toggle("sidebar-collapsed");
+}
+document.getElementById("sidebarToggle").onclick = toggleSidebar;
+
+const isMobileLayout = () => window.matchMedia("(max-width: 720px)").matches;
+
+// En mobile arranca colapsado (barra angosta abajo); en desktop arranca abierto como siempre.
+if (isMobileLayout()) sidebarEl.classList.add("collapsed");
+
+// Manija del bottom sheet: tap para abrir/cerrar + arrastre para lo mismo (mas natural al tacto)
+const sidebarHandle = document.getElementById("sidebarHandle");
+let dragStartY = null;
+let dragMoved = false;
+
+sidebarHandle.addEventListener("touchstart", (e) => {
+  dragStartY = e.touches[0].clientY;
+  dragMoved = false;
+  sidebarEl.style.transition = "none";
+}, { passive: true });
+
+sidebarHandle.addEventListener("touchmove", (e) => {
+  if (dragStartY === null) return;
+  const dy = e.touches[0].clientY - dragStartY;
+  if (Math.abs(dy) > 6) dragMoved = true;
+  const collapsedOffset = sidebarEl.offsetHeight - 46;
+  const baseOffset = sidebarEl.classList.contains("collapsed") ? collapsedOffset : 0;
+  const offset = Math.min(collapsedOffset, Math.max(0, baseOffset + dy));
+  sidebarEl.style.transform = `translateY(${offset}px)`;
+}, { passive: true });
+
+sidebarHandle.addEventListener("touchend", (e) => {
+  sidebarEl.style.transition = "";
+  if (dragMoved) {
+    const collapsedOffset = sidebarEl.offsetHeight - 46;
+    const baseOffset = sidebarEl.classList.contains("collapsed") ? collapsedOffset : 0;
+    const dy = e.changedTouches[0].clientY - dragStartY;
+    const finalOffset = Math.min(collapsedOffset, Math.max(0, baseOffset + dy));
+    const isNowCollapsed = sidebarEl.classList.contains("collapsed");
+    const shouldBeCollapsed = finalOffset > collapsedOffset / 2;
+    sidebarEl.style.transform = "";
+    if (shouldBeCollapsed !== isNowCollapsed) toggleSidebar();
+  } else {
+    sidebarEl.style.transform = "";
+    toggleSidebar();
+  }
+  dragStartY = null;
+  dragMoved = false;
+});
+
+// Fallback para mouse (p.ej. ventana angosta en desktop): el toggle por touch ya lo maneja touchend arriba
+sidebarHandle.addEventListener("click", () => {
+  if (!("ontouchstart" in window)) toggleSidebar();
+});
 
 // ============== NAVEGACION POR FLECHAS (acumulativa, con reinicio al primer click) ==============
 let currentIndex = -1; // -1 = nada de la secuencia mostrado (o "modelo completo" antes de arrancar)
@@ -657,10 +745,9 @@ renderer.domElement.addEventListener("click", (e) => {
   }
 
   const code = findPanelCodeForObject(hit.object);
-  if (code && PANEL_IMAGES[code]) {
-    openJpgModal(code);
-  } else if (code) {
-    fitCameraToObject(groups[code]);
+  if (code) {
+    selectPanel(selectedGroupKey === code ? null : code);
+    if (PANEL_IMAGES[code]) openJpgModal(code);
   }
 });
 
@@ -727,8 +814,11 @@ const HOVER_FACE_MATERIAL = new THREE.MeshBasicMaterial({
 });
 let hoveredGroupKey = null;
 let hoverHighlightPending = false;
+let selectedGroupKey = null; // panel elegido por click/tap: queda iluminado hasta elegir otro
 
 function setGroupHighlight(key, on) {
+  // No apagar el resaltado del panel actualmente seleccionado (p.ej. al mover el mouse afuera)
+  if (!on && key === selectedGroupKey) return;
   const targets = [];
   if (groups[key]) targets.push(groups[key]);
   if (LINKED_EXTRAS[key]) targets.push(...LINKED_EXTRAS[key]);
@@ -737,6 +827,20 @@ function setGroupHighlight(key, on) {
       if (o.isMesh) o.material = on ? HOVER_FACE_MATERIAL : FACE_MATERIAL;
     });
   });
+}
+
+// Selecciona (o deselecciona, si code es null) un panel de forma persistente:
+// lo ilumina en el modelo 3D y resalta su fila en la lista de capas, SIN mover la camara.
+function selectPanel(code) {
+  const prev = selectedGroupKey;
+  selectedGroupKey = code;
+  if (prev && prev !== code) setGroupHighlight(prev, false);
+  if (code) setGroupHighlight(code, true);
+  document.querySelectorAll(".layer-row.picked").forEach((r) => r.classList.remove("picked"));
+  if (code) {
+    const row = document.querySelector(`.layer-row[data-code="${code}"]`);
+    if (row) row.classList.add("picked");
+  }
 }
 
 renderer.domElement.addEventListener("mousemove", (e) => {
